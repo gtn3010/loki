@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
@@ -13,7 +14,7 @@ import (
 	tsdb_index "github.com/grafana/loki/v3/pkg/storage/stores/shipper/indexshipper/tsdb/index"
 )
 
-func analyze(indexShipper indexshipper.IndexShipper, tableName string, tenants []string) error {
+func analyze(indexShipper indexshipper.IndexShipper, tableName string, tenants []string, from, to model.Time, kvPairs []string) error {
 
 	var (
 		series             int
@@ -22,9 +23,20 @@ func analyze(indexShipper indexshipper.IndexShipper, tableName string, tenants [
 		chunkRes           []tsdb.ChunkRef
 		maxChunksPerSeries int
 		seriesOver1kChunks int
+		labelMatchers      []*labels.Matcher
 	)
+
+	if len(kvPairs) > 0 {
+		for _, kv := range kvPairs {
+			s := strings.Split(kv, "=")
+			labelMatchers = append(labelMatchers, labels.MustNewMatcher(labels.MatchEqual, s[0], s[1]))
+		}
+	} else {
+		labelMatchers = append(labelMatchers, labels.MustNewMatcher(labels.MatchEqual, "", ""))
+	}
+
 	for _, tenant := range tenants {
-		fmt.Printf("analyzing tenant %s\n", tenant)
+		fmt.Printf("analyzing tenant %s from %s to %s with label matchers %v \n", tenant, from, to, labelMatchers)
 		err := indexShipper.ForEach(
 			context.Background(),
 			tableName,
@@ -41,29 +53,35 @@ func analyze(indexShipper indexshipper.IndexShipper, tableName string, tenants [
 				res, err := casted.Series(
 					context.Background(),
 					tenant,
-					model.Earliest,
-					model.Latest,
+					from,
+					to,
 					seriesRes, nil,
-					labels.MustNewMatcher(labels.MatchEqual, "", ""),
+					labelMatchers...,
 				)
 
 				if err != nil {
 					return err
 				}
 
+				fmt.Println("Labels with chunkRef: ", res)
+
 				series += len(res)
 
 				chunkRes, err := casted.GetChunkRefs(
 					context.Background(),
 					tenant,
-					model.Earliest,
-					model.Latest,
+					from,
+					to,
 					chunkRes, nil,
-					labels.MustNewMatcher(labels.MatchEqual, "", ""),
+					labelMatchers...,
 				)
 
 				if err != nil {
 					return err
+				}
+
+				for _, chunkRef := range chunkRes {
+					fmt.Printf("ChunkRef %s %v from %s to %s \n", chunkRef.User, chunkRef.Fingerprint, chunkRef.Start, chunkRef.End)
 				}
 
 				chunks += len(chunkRes)

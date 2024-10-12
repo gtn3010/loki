@@ -2,8 +2,13 @@ package main
 
 import (
 	"flag"
+	"fmt"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/common/model"
 
 	"github.com/grafana/loki/v3/pkg/storage"
 	"github.com/grafana/loki/v3/pkg/storage/stores/shipper/indexshipper"
@@ -40,9 +45,48 @@ func main() {
 	)
 	helpers.ExitErr("creating index shipper", err)
 
-	tenants, err := helpers.ResolveTenants(objectClient, periodCfg.IndexTables.PathPrefix, tableName)
-	helpers.ExitErr("resolving tenants", err)
+	filteredTenants := os.Getenv("TENANTS")
 
-	err = analyze(shipper, tableName, tenants)
+	var tenants []string
+	if len(filteredTenants) > 0 {
+		tenants = strings.Split(filteredTenants, ",")
+	} else {
+		tenants, err = helpers.ResolveTenants(objectClient, periodCfg.IndexTables.PathPrefix, tableName)
+		helpers.ExitErr("resolving tenants", err)
+	}
+
+	startTimeArg := os.Getenv("START")
+	endTimeArg := os.Getenv("END")
+
+	startTimeProm := model.Earliest
+	if startTimeArg != "" {
+		// Parse the input strings into time.Time
+		startTime, err := time.Parse("2006-01-02 15:04:05", startTimeArg)
+		if err != nil {
+			fmt.Printf("Error parsing 'start' time: %v\n", err)
+			os.Exit(1)
+		}
+		// Convert to Prometheus model.Time
+		startTimeProm = model.Time(startTime.Unix())
+	}
+
+	endTimeProm := model.Latest
+	if endTimeArg != "" {
+		endTime, err := time.Parse("2006-01-02 15:04:05", endTimeArg)
+		if err != nil {
+		    fmt.Printf("Error parsing 'end' time: %v\n", err)
+		    os.Exit(1)
+		}
+		endTimeProm = model.Time(endTime.Unix())
+	}
+
+	labels := os.Getenv("LABEL_FILTER")
+	kvPairs := []string{}
+	if labels != "" {
+		kvPairs = strings.Split(labels, ",")
+	}
+
+	err = analyze(shipper, tableName, tenants, startTimeProm, endTimeProm, kvPairs)
+
 	helpers.ExitErr("analyzing", err)
 }
